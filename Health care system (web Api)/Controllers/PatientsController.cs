@@ -1,6 +1,10 @@
-﻿using Health_care_system__web_Api_.Data;
+﻿using System.Numerics;
+using AutoMapper;
+using Azure;
+using Health_care_system__web_Api_.Data;
 using Health_care_system__web_Api_.Dtos;
 using Health_care_system__web_Api_.Entities;
+using Health_care_system__web_Api_.Helpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,103 +16,142 @@ namespace Health_care_system__web_Api_.Controllers
     public class PatientsController : ControllerBase
     {
         private readonly ApplicationDbContext _dbContext;
+        private readonly ILogger<PatientsController> _logger;
+        private readonly IMapper _mapper;
 
-        public PatientsController(ApplicationDbContext dbContext)
+        public PatientsController(ApplicationDbContext dbContext, ILogger<PatientsController> logger,IMapper mapper)
         {
             _dbContext = dbContext;
+            _logger = logger;
+            _mapper = mapper;
         }
-        [HttpGet]
-        public async Task<IActionResult> GetPatients()
-        {
-            var patients = await _dbContext.Patients
-                .Include(p => p.Appointments)
-                .ThenInclude(a => a.Doctor)
-                .Select(p => new PatientResponse
-                {
-                    Id = p.Id,
-                    Name = p.Name,
-                    BirthDate = p.BirthDate,
-                    Appointments = p.Appointments
-                        .Select(a => new AppointmentPatientResponse
-                        {
-                            DoctorName = a.Doctor.Name,
-                            AppointmentDate = a.AppointmentDate
-                        })
-                        .ToList()
-                })
-                .ToListAsync();
 
-            return Ok(patients);
+        [HttpGet]
+        public async Task<IActionResult> GetPatients([FromQuery] QuerryParams request)
+        {
+            _logger.LogInformation("Fetching patients with search: {Search}, page: {Page}", request.Search, request.Page);
+
+            var query = _dbContext.Patients.AsQueryable();
+
+            if (!string.IsNullOrEmpty(request.Search))
+            {
+                var search = request.Search.ToLower();
+
+                query = query.Where(p =>
+                    p.Name.ToLower().Contains(search));
+            }
+
+            
+            var paginated = PaginationHelper
+                .ApplyPagination(query, request.Page, request.PageSize);
+
+            var result = await paginated.ToListAsync();
+            var response = _mapper.Map<List<PatientResponse>>(result);
+
+            _logger.LogInformation("Returned {Count} patients", result.Count);
+
+            return Ok(result);
         }
+
         [HttpGet("{id:int}")]
         public async Task<IActionResult> Getpatient(int id)
         {
+            _logger.LogInformation("Fetching patient with Id: {Id}", id);
+
             var patient = await _dbContext.Patients
                 .Include(p => p.Appointments)
                 .ThenInclude(a => a.Doctor)
                 .FirstOrDefaultAsync(p => p.Id == id);
 
             if (patient == null)
-                return NotFound();
-
-            var response = new PatientResponse
             {
-                Id = patient.Id,
-                Name = patient.Name,
-                BirthDate = patient.BirthDate,
-                Appointments = patient.Appointments
-                    .Select(a => new AppointmentPatientResponse
-                    {
-                        DoctorName = a.Doctor.Name,
-                        AppointmentDate = a.AppointmentDate
-                    })
-                    .ToList()
-            };
+                _logger.LogWarning("Patient not found with Id: {Id}", id);
+                return NotFound();
+            }
+
+            var response = _mapper.Map<PatientResponse>(patient);
+
+            _logger.LogInformation("Patient returned with Id: {Id}", id);
 
             return Ok(response);
         }
+
         [HttpPost]
         public async Task<IActionResult> CreatePatient(CreatePatientsRequest patientRequest)
         {
+            _logger.LogInformation("CreatePatient called with Name: {Name}", patientRequest?.Name);
+
             if (patientRequest is not null)
             {
                 if (string.IsNullOrEmpty(patientRequest.Name))
-                    return BadRequest("Category name is required.");
-                if (patientRequest.BirthDate == default)
-                    return BadRequest("Birth date is required.");
-
-                var patient = new Patient
                 {
-                    Name = patientRequest.Name,
-                    BirthDate = patientRequest.BirthDate
-                };
+                    _logger.LogWarning("Patient creation failed: Name is empty");
+                    return BadRequest("Category name is required.");
+                }
+
+                if (patientRequest.BirthDate == default)
+                {
+                    _logger.LogWarning("Patient creation failed: BirthDate is invalid");
+                    return BadRequest("Birth date is required.");
+                }
+
+                var patient = _mapper.Map<Patient>(patientRequest);
+
                 await _dbContext.Patients.AddAsync(patient);
                 await _dbContext.SaveChangesAsync();
+
+                _logger.LogInformation("Patient created with Id: {Id}", patient.Id);
+
                 return Created();
             }
+
+            _logger.LogWarning("CreatePatient failed: request is null");
+
             return BadRequest("Invalid patients data.");
         }
+
         [HttpPut]
         public async Task<IActionResult> UpdatePatient(UpdatePatientsRequest patientRequest)
         {
+            _logger.LogInformation("Updating patient with Id: {Id}", patientRequest.Id);
+
             var patient = await _dbContext.Patients.FirstOrDefaultAsync(P => P.Id == patientRequest.Id);
+
             if (patient == null)
+            {
+                _logger.LogWarning("Patient not found for update with Id: {Id}", patientRequest.Id);
                 return NotFound();
-            patient.Name = patientRequest.Name;
-            patient.BirthDate = patientRequest.BirthDate;
+            }
+
+            _mapper.Map(patientRequest, patient);
+
+
             _dbContext.Patients.Update(patient);
             await _dbContext.SaveChangesAsync();
-            return Ok(patient);
 
+            _logger.LogInformation("Patient updated with Id: {Id}", patientRequest.Id);
+
+            return Ok(patient);
         }
+
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> DeletePatient(int id)
         {
+            _logger.LogInformation("Deleting patient with Id: {Id}", id);
+
             var patient = await _dbContext.Patients.FirstOrDefaultAsync(p => p.Id == id);
+
             if (patient == null)
+            {
+                _logger.LogWarning("Patient not found for deletion with Id: {Id}", id);
                 return NotFound();
+            }
+
             _dbContext.Patients.Remove(patient);
             await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Patient deleted with Id: {Id}", id);
+
             return Ok(patient);
         }
     }
