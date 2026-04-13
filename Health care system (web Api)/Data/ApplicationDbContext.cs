@@ -14,11 +14,11 @@ namespace Health_care_system__web_Api_.Data
         
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            modelBuilder.Entity<Appointment>()
-                .HasKey(AP => new { AP.PatientId, AP.DoctorId });
             base.OnModelCreating(modelBuilder);
             modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
-
+            modelBuilder.Entity<Doctor>().HasQueryFilter(d => !d.IsDeleted);
+            modelBuilder.Entity<Patient>().HasQueryFilter(p => !p.IsDeleted);
+            modelBuilder.Entity<Appointment>().HasQueryFilter(a => !a.IsDeleted);
             modelBuilder.Entity<Doctor>().HasData(
                 new Doctor { Id = 5, Name = "Dr. Ahmed", Specialization = "Cardiology" },
                 new Doctor { Id = 6, Name = "Dr. Ali", Specialization = "Dentist" }

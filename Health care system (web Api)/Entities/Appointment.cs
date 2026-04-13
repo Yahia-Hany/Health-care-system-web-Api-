@@ -1,6 +1,6 @@
 ﻿namespace Health_care_system__web_Api_.Entities
 {
-    public class Appointment
+    public class Appointment : BaseEntity
     {
         public int PatientId { get; set; }
         public Patient Patient { get; set; }

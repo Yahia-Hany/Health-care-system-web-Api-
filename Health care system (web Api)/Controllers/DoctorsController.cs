@@ -3,6 +3,7 @@ using Health_care_system__web_Api_.Data;
 using Health_care_system__web_Api_.Dtos;
 using Health_care_system__web_Api_.Entities;
 using Health_care_system__web_Api_.Helpers;
+using Health_care_system__web_Api_.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,143 +14,225 @@ namespace Health_care_system__web_Api_.Controllers
     [ApiController]
     public class DoctorsController : ControllerBase
     {
-        private readonly ApplicationDbContext _dbContext;
+        //private readonly ApplicationDbContext _dbContext;
+        private readonly IDoctorService _service;
         private readonly ILogger<DoctorsController> _logger;
         private readonly IMapper _mapper;
 
-        public DoctorsController(ApplicationDbContext dbContext, ILogger<DoctorsController> logger,IMapper mapper)
+        public DoctorsController(IDoctorService service, ILogger<DoctorsController> logger,IMapper mapper)
         {
-            _dbContext = dbContext;
+            //_dbContext = dbContext;
+            _service = service;
             _logger = logger;
             _mapper = mapper;
         }
-
         [HttpGet]
-        public async Task<IActionResult> GetDoctors([FromQuery] QuerryParams request)
+        public async Task<IActionResult> GetDoctors()
         {
-            _logger.LogInformation("Fetching doctors with search: {Search}, page: {Page}", request.Search, request.Page);
-
-            var query = _dbContext.Doctors.AsQueryable();
-
-            if (!string.IsNullOrEmpty(request.Search))
+            _logger.LogInformation("Fetching all doctors");
+            var doctors = await _service.GetAllAsync();
+            var response = _mapper.Map<List<DoctorResponse>>(doctors);
+            _logger.LogInformation("Returned {Count} doctors", response.Count);
+            if(!response.Any())
             {
-                var search = request.Search.ToLower();
-
-                query = query.Where(d =>
-                    d.Name.ToLower().Contains(search) ||
-                    d.Specialization.ToLower().Contains(search));
+                _logger.LogWarning("No doctors found");
+                return NotFound("No doctors found.");
             }
-
-
-            var paginated = PaginationHelper
-                .ApplyPagination(query, request.Page, request.PageSize);
-
-            var result = await paginated.ToListAsync();
-            var response = _mapper.Map<List<DoctorResponse>>(result);
-
-            _logger.LogInformation("Returned {Count} doctors", result.Count);
-
-            return Ok(result);
+            return Ok(response);
         }
-
-        [HttpGet("{id:int}")]
+        [HttpGet]
+        [Route("GetById/{id:int}")]
         public async Task<IActionResult> GetDoctor(int id)
         {
             _logger.LogInformation("Fetching doctor with Id: {Id}", id);
-
-            var doctor = await _dbContext.Doctors
-                .Include(d => d.Appointments)
-                .ThenInclude(a => a.Patient)
-                .FirstOrDefaultAsync(d => d.Id == id);
-
+            var doctor = await _service.GetByIdAsync(id);
             if (doctor == null)
             {
                 _logger.LogWarning("Doctor not found with Id: {Id}", id);
-                return NotFound();
+                return NotFound($"Doctor with Id {id} not found.");
             }
-
             var response = _mapper.Map<DoctorResponse>(doctor);
-
             _logger.LogInformation("Doctor returned with Id: {Id}", id);
-
             return Ok(response);
         }
-
         [HttpPost]
         public async Task<IActionResult> CreateDoctor(CreateDoctorsRequest doctorsRequest)
         {
             _logger.LogInformation("CreateDoctor called with Name: {Name}", doctorsRequest?.Name);
-
-            if (doctorsRequest is not null)
+            if (doctorsRequest is null)
             {
-                if (string.IsNullOrEmpty(doctorsRequest.Name))
-                {
-                    _logger.LogWarning("Doctor creation failed: Name is empty");
-                    return BadRequest("Doctor name is required.");
-                }
-
-                if (string.IsNullOrEmpty(doctorsRequest.Specialization))
-                {
-                    _logger.LogWarning("Doctor creation failed: Specialization is empty");
-                    return BadRequest("Specialization is required.");
-                }
-
-                var doctor = _mapper.Map<Doctor>(doctorsRequest);
-
-                await _dbContext.Doctors.AddAsync(doctor);
-                await _dbContext.SaveChangesAsync();
-
-                _logger.LogInformation("Doctor created with Id: {Id}", doctor.Id);
-
-                return Created();
+                _logger.LogWarning("CreateDoctor failed: request is null");
+                return BadRequest("Invalid Doctor data.");
             }
-
-            _logger.LogWarning("CreateDoctor failed: request is null");
-            return BadRequest("Invalid Doctor data.");
-        }
-
-        [HttpPut]
-        public async Task<IActionResult> UpdateDoctors(UpdateDoctorRequest doctorRequest)
-        {
-            _logger.LogInformation("Updating doctor with Id: {Id}", doctorRequest.Id);
-
-            var doctor = await _dbContext.Doctors.FirstOrDefaultAsync(d => d.Id == doctorRequest.Id);
-
-            if (doctor == null)
+            if (string.IsNullOrEmpty(doctorsRequest.Name))
             {
-                _logger.LogWarning("Doctor not found for update with Id: {Id}", doctorRequest.Id);
-                return NotFound();
+                _logger.LogWarning("Doctor creation failed: Name is empty");
+                return BadRequest("Doctor name is required.");
             }
-
-            _mapper.Map(doctorRequest, doctor);
-
-            _dbContext.Doctors.Update(doctor);
-            await _dbContext.SaveChangesAsync();
-
-            _logger.LogInformation("Doctor updated with Id: {Id}", doctorRequest.Id);
-
-            return Ok(doctor);
+            if (string.IsNullOrEmpty(doctorsRequest.Specialization))
+            {
+                _logger.LogWarning("Doctor creation failed: Specialization is empty");
+                return BadRequest("Specialization is required.");
+            }
+            var doctor = _mapper.Map<Doctor>(doctorsRequest);
+            var createdDoctor = await _service.CreateAsync(doctor);
+            _logger.LogInformation("Doctor created with Id: {Id}", createdDoctor.Id);
+            return CreatedAtAction(nameof(GetDoctor), new { id = createdDoctor.Id }, createdDoctor);
         }
-
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> DeleteDoctor(int id)
         {
             _logger.LogInformation("Deleting doctor with Id: {Id}", id);
-
-            var doctor = await _dbContext.Doctors.FirstOrDefaultAsync(D => D.Id == id);
-
-            if (doctor == null)
+            var success = await _service.DeleteAsync(id);
+            if (!success)
             {
                 _logger.LogWarning("Doctor not found for deletion with Id: {Id}", id);
-                return NotFound();
+                return NotFound($"Doctor with Id {id} not found.");
             }
-
-            _dbContext.Doctors.Remove(doctor);
-            await _dbContext.SaveChangesAsync();
-
             _logger.LogInformation("Doctor deleted with Id: {Id}", id);
-
+            return NoContent();
+        }
+        [HttpPut]
+        public async Task<IActionResult> UpdateDoctors(UpdateDoctorRequest doctorRequest)
+        {
+            _logger.LogInformation("Updating doctor with Id: {Id}", doctorRequest.Id);
+            var doctor = _mapper.Map<Doctor>(doctorRequest);
+            var success = await _service.UpdateAsync(doctor);
+            if (!success)
+            {
+                _logger.LogWarning("Doctor not found for update with Id: {Id}", doctorRequest.Id);
+                return NotFound($"Doctor with Id {doctorRequest.Id} not found.");
+            }
+            _logger.LogInformation("Doctor updated with Id: {Id}", doctorRequest.Id);
             return Ok(doctor);
         }
+
+        //[HttpGet]
+        //public async Task<IActionResult> GetDoctors([FromQuery] QuerryParams request)
+        //{
+        //    _logger.LogInformation("Fetching doctors with search: {Search}, page: {Page}", request.Search, request.Page);
+
+        //    var query = _dbContext.Doctors.AsQueryable();
+
+        //    if (!string.IsNullOrEmpty(request.Search))
+        //    {
+        //        var search = request.Search.ToLower();
+
+        //        query = query.Where(d =>
+        //            d.Name.ToLower().Contains(search) ||
+        //            d.Specialization.ToLower().Contains(search));
+        //    }
+
+
+        //    var paginated = PaginationHelper
+        //        .ApplyPagination(query, request.Page, request.PageSize);
+
+        //    var result = await paginated.ToListAsync();
+        //    var response = _mapper.Map<List<DoctorResponse>>(result);
+
+        //    _logger.LogInformation("Returned {Count} doctors", result.Count);
+
+        //    return Ok(result);
+        //}
+
+        //[HttpGet("{id:int}")]
+        //public async Task<IActionResult> GetDoctor(int id)
+        //{
+        //    _logger.LogInformation("Fetching doctor with Id: {Id}", id);
+
+        //    var doctor = await _dbContext.Doctors
+        //        .Include(d => d.Appointments)
+        //        .ThenInclude(a => a.Patient)
+        //        .FirstOrDefaultAsync(d => d.Id == id);
+
+        //    if (doctor == null)
+        //    {
+        //        _logger.LogWarning("Doctor not found with Id: {Id}", id);
+        //        return NotFound();
+        //    }
+
+        //    var response = _mapper.Map<DoctorResponse>(doctor);
+
+        //    _logger.LogInformation("Doctor returned with Id: {Id}", id);
+
+        //    return Ok(response);
+        //}
+
+        //[HttpPost]
+        //public async Task<IActionResult> CreateDoctor(CreateDoctorsRequest doctorsRequest)
+        //{
+        //    _logger.LogInformation("CreateDoctor called with Name: {Name}", doctorsRequest?.Name);
+
+        //    if (doctorsRequest is not null)
+        //    {
+        //        if (string.IsNullOrEmpty(doctorsRequest.Name))
+        //        {
+        //            _logger.LogWarning("Doctor creation failed: Name is empty");
+        //            return BadRequest("Doctor name is required.");
+        //        }
+
+        //        if (string.IsNullOrEmpty(doctorsRequest.Specialization))
+        //        {
+        //            _logger.LogWarning("Doctor creation failed: Specialization is empty");
+        //            return BadRequest("Specialization is required.");
+        //        }
+
+        //        var doctor = _mapper.Map<Doctor>(doctorsRequest);
+
+        //        await _dbContext.Doctors.AddAsync(doctor);
+        //        await _dbContext.SaveChangesAsync();
+
+        //        _logger.LogInformation("Doctor created with Id: {Id}", doctor.Id);
+
+        //        return Created();
+        //    }
+
+        //    _logger.LogWarning("CreateDoctor failed: request is null");
+        //    return BadRequest("Invalid Doctor data.");
+        //}
+
+        //[HttpPut]
+        //public async Task<IActionResult> UpdateDoctors(UpdateDoctorRequest doctorRequest)
+        //{
+        //    _logger.LogInformation("Updating doctor with Id: {Id}", doctorRequest.Id);
+
+        //    var doctor = await _dbContext.Doctors.FirstOrDefaultAsync(d => d.Id == doctorRequest.Id);
+
+        //    if (doctor == null)
+        //    {
+        //        _logger.LogWarning("Doctor not found for update with Id: {Id}", doctorRequest.Id);
+        //        return NotFound();
+        //    }
+
+        //    _mapper.Map(doctorRequest, doctor);
+
+        //    _dbContext.Doctors.Update(doctor);
+        //    await _dbContext.SaveChangesAsync();
+
+        //    _logger.LogInformation("Doctor updated with Id: {Id}", doctorRequest.Id);
+
+        //    return Ok(doctor);
+        //}
+
+        //[HttpDelete("{id:int}")]
+        //public async Task<IActionResult> DeleteDoctor(int id)
+        //{
+        //    _logger.LogInformation("Deleting doctor with Id: {Id}", id);
+
+        //    var doctor = await _dbContext.Doctors.FirstOrDefaultAsync(D => D.Id == id);
+
+        //    if (doctor == null)
+        //    {
+        //        _logger.LogWarning("Doctor not found for deletion with Id: {Id}", id);
+        //        return NotFound();
+        //    }
+
+        //    _dbContext.Doctors.Remove(doctor);
+        //    await _dbContext.SaveChangesAsync();
+
+        //    _logger.LogInformation("Doctor deleted with Id: {Id}", id);
+
+        //    return Ok(doctor);
+        //}
     }
 }
